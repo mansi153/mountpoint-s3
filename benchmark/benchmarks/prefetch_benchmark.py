@@ -72,6 +72,9 @@ class PrefetchBenchmark(BaseBenchmark):
         if not self.common_config['download_checksums']:
             prefetch_env["EXPERIMENTAL_MOUNTPOINT_NO_DOWNLOAD_INTEGRITY_VALIDATION"] = "ON"
 
+        if (crt_eventloop_threads := self.common_config['crt_eventloop_threads']) is not None:
+            prefetch_env["UNSTABLE_CRT_EVENTLOOP_THREADS"] = str(crt_eventloop_threads)
+
         subprocess_env = os.environ.copy() | prefetch_env
         log.debug("Subprocess env: %s", subprocess_env)
 
