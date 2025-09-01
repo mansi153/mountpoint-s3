@@ -296,6 +296,8 @@ pub enum WriteStatus {
     LocalUnopened,
     /// Local inode already opened
     LocalOpen,
+    /// Closed but release in-progress
+    ReleaseInProgress,
     /// Remote inode
     Remote,
     /// Pending rename for indoe
