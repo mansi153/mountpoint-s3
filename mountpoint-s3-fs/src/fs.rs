@@ -42,6 +42,9 @@ pub use flags::{OpenFlags, RenameFlags};
 mod handles;
 pub use handles::{FileHandle, FileHandleState};
 
+mod inode_lock;
+use inode_lock::InodeLock;
+
 mod sse;
 pub use sse::{ServerSideEncryption, SseCorruptedError};
 
@@ -60,6 +63,7 @@ where
     uploader: Uploader<Client>,
     next_handle: AtomicU64,
     file_handles: AsyncRwLock<HashMap<u64, Arc<FileHandle<Client>>>>,
+    inode_lock: InodeLock,
 }
 
 /// Reply to a `lookup` call
@@ -172,6 +176,7 @@ where
             uploader,
             next_handle: AtomicU64::new(1),
             file_handles: AsyncRwLock::new(HashMap::new()),
+            inode_lock: InodeLock::new(),
         }
     }
 
@@ -379,6 +384,7 @@ where
             InodeKind::File => (),
         }
 
+        self.inode_lock.wait_for_remote(ino).await;
         let state = if flags.contains(OpenFlags::O_RDWR) {
             if !lookup.is_remote()
                 || (self.config.allow_overwrite && flags.contains(OpenFlags::O_TRUNC))
@@ -444,6 +450,9 @@ where
             }
         };
         logging::record_name(handle.file_name());
+
+        self.inode_lock.wait_for_remote(ino).await;
+
         let mut state = handle.state.lock().await;
         let request = match &mut *state {
             FileHandleState::Read(request) => request,
@@ -520,6 +529,8 @@ where
             }
         };
         logging::record_name(handle.file_name());
+
+        self.inode_lock.wait_for_remote(ino).await;
 
         let len = {
             let mut state = handle.state.lock().await;
@@ -660,6 +671,8 @@ where
         _flush: bool,
     ) -> Result<(), Error> {
         trace!("fs:release with ino {:?} fh {:?}", ino, fh);
+        self.inode_lock.set_release_in_progress(ino).await;
+
         let file_handle = {
             let mut file_handles = self.file_handles.write().await;
             file_handles
@@ -698,6 +711,7 @@ where
                 if upload_completed_async {
                     debug!(key = %file_handle.location, "upload completed async after file was closed");
                 }
+                self.inode_lock.set_release_complete(ino).await;
                 Ok(())
             }
             Err(e) => {

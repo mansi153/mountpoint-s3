@@ -136,7 +136,7 @@ impl<'a> PendingRenameGuard<'a> {
     fn try_transition(inode: &'a Inode) -> Result<Self, InodeError> {
         let mut locked = inode.get_mut_inode_state()?;
         match locked.write_status {
-            WriteStatus::LocalUnopened | WriteStatus::LocalOpen | WriteStatus::PendingRename => {
+            WriteStatus::LocalUnopened | WriteStatus::LocalOpen | WriteStatus::ReleaseInProgress | WriteStatus::PendingRename => {
                 return Err(InodeError::RenameNotPermittedWhileWriting(inode.err()));
             }
             WriteStatus::Remote => {} // All OK.
@@ -568,6 +568,7 @@ impl<OC: ObjectClient + Send + Sync + Clone> Metablock for Superblock<OC> {
                     *deleted = true;
                 }
             },
+            WriteStatus::ReleaseInProgress => unreachable!("Only files can be in ReleaseInProgress"),
             WriteStatus::PendingRename => unreachable!("Only files can be in PendingRename"),
         }
 
@@ -617,7 +618,7 @@ impl<OC: ObjectClient + Send + Sync + Clone> Metablock for Superblock<OC> {
         };
 
         match write_status {
-            WriteStatus::LocalUnopened | WriteStatus::LocalOpen | WriteStatus::PendingRename => {
+            WriteStatus::LocalUnopened | WriteStatus::LocalOpen | WriteStatus::ReleaseInProgress | WriteStatus::PendingRename => {
                 // In the future, we may permit `unlink` and cancel any in-flight uploads.
                 warn!(
                     parent = parent_ino,
@@ -724,7 +725,7 @@ impl<OC: ObjectClient + Send + Sync + Clone> Metablock for Superblock<OC> {
                 state.write_status = WriteStatus::LocalOpen;
                 state.stat.size = 0;
             }
-            WriteStatus::LocalOpen | WriteStatus::PendingRename => {
+            WriteStatus::LocalOpen | WriteStatus::ReleaseInProgress | WriteStatus::PendingRename => {
                 return Err(InodeError::InodeAlreadyWriting(inode.err()));
             }
             WriteStatus::Remote => {
