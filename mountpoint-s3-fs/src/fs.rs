@@ -375,6 +375,9 @@ where
         if flags.intersects(OpenFlags::O_SYNC | OpenFlags::O_DSYNC) {
             return Err(err!(libc::EINVAL, "O_SYNC and O_DSYNC are not supported"));
         }
+        debug!("Acquiring lock in open");
+        self.inode_lock.wait_for_remote(ino).await;
+        debug!("Acquirlock in open");
 
         let force_revalidate = !self.config.cache_config.serve_lookup_from_cache || direct_io;
         let lookup = self.metablock.getattr(ino, force_revalidate).await?;
@@ -384,7 +387,6 @@ where
             InodeKind::File => (),
         }
 
-        self.inode_lock.wait_for_remote(ino).await;
         let state = if flags.contains(OpenFlags::O_RDWR) {
             if !lookup.is_remote()
                 || (self.config.allow_overwrite && flags.contains(OpenFlags::O_TRUNC))
@@ -451,7 +453,9 @@ where
         };
         logging::record_name(handle.file_name());
 
+        debug!("Acquiring lock in read");
         self.inode_lock.wait_for_remote(ino).await;
+        debug!("Acquirlock in read");
 
         let mut state = handle.state.lock().await;
         let request = match &mut *state {
@@ -530,7 +534,9 @@ where
         };
         logging::record_name(handle.file_name());
 
+        debug!("Acquiring lock in write");
         self.inode_lock.wait_for_remote(ino).await;
+        debug!("Acquirlock in write");
 
         let len = {
             let mut state = handle.state.lock().await;
@@ -671,7 +677,9 @@ where
         _flush: bool,
     ) -> Result<(), Error> {
         trace!("fs:release with ino {:?} fh {:?}", ino, fh);
+        debug!("Setting lock in release");
         self.inode_lock.set_release_in_progress(ino).await;
+        debug!("Setlock in release");
 
         let file_handle = {
             let mut file_handles = self.file_handles.write().await;
@@ -696,6 +704,9 @@ where
             FileHandleState::Read(_) => {
                 metrics::gauge!("fs.current_handles", "type" => "read").decrement(1.0);
                 self.metablock.finish_reading(file_handle.ino).await?;
+                debug!("Releasing lock in release");
+                self.inode_lock.set_release_complete(ino).await;
+                debug!("Releaslock in release");
                 return Ok(());
             }
             FileHandleState::Write(write_state) => write_state,
@@ -711,7 +722,9 @@ where
                 if upload_completed_async {
                     debug!(key = %file_handle.location, "upload completed async after file was closed");
                 }
+                debug!("Releasing lock in release");
                 self.inode_lock.set_release_complete(ino).await;
+                debug!("Releaslock in release");
                 Ok(())
             }
             Err(e) => {
