@@ -5,6 +5,7 @@ use const_format::formatcp;
 #[cfg(target_os = "linux")]
 use fuser::MountOption;
 use fuser::{Filesystem, Session, SessionUnmounter};
+use crate::fs::request_coordinator::S3RequestCoordinator;
 use tracing::{debug, error, trace, warn};
 
 use super::config::{FuseSessionConfig, MountPoint};
@@ -32,6 +33,15 @@ impl FuseSession {
         fuse_fs: FS,
         fuse_session_config: FuseSessionConfig,
     ) -> anyhow::Result<FuseSession> {
+        Self::new_with_coordinator(fuse_fs, fuse_session_config, None)
+    }
+    
+    /// Create a new multi-threaded FUSE session with optional coordinator.
+    pub fn new_with_coordinator<FS: Filesystem + Send + Sync + 'static>(
+        fuse_fs: FS,
+        fuse_session_config: FuseSessionConfig,
+        coordinator: Option<Arc<S3RequestCoordinator>>,
+    ) -> anyhow::Result<FuseSession> {
         let session = match fuse_session_config.mount_point {
             MountPoint::Directory(path) => {
                 Session::new(fuse_fs, path, &fuse_session_config.options).context("Failed to create FUSE session")?
@@ -43,13 +53,14 @@ impl FuseSession {
                 session_acl_from_mount_options(&fuse_session_config.options),
             ),
         };
-        Self::from_session(session, fuse_session_config.max_threads).context("Failed to start FUSE session")
+        Self::from_session(session, fuse_session_config.max_threads, coordinator).context("Failed to start FUSE session")
     }
 
     /// Create worker threads to dispatch requests for a FUSE session.
     fn from_session<FS: Filesystem + Send + Sync + 'static>(
         mut session: Session<FS>,
         max_worker_threads: usize,
+        coordinator: Option<Arc<S3RequestCoordinator>>,
     ) -> anyhow::Result<Self> {
         assert!(max_worker_threads > 0);
 
@@ -58,6 +69,11 @@ impl FuseSession {
             "creating worker thread pool for handling FUSE requests",
         );
 
+        // Set coordinator if provided
+        if let Some(coordinator) = coordinator {
+            session.set_coordinator(coordinator);
+        }
+        
         let unmounter = session.unmount_callable();
 
         let (tx, rx) = mpsc::channel();

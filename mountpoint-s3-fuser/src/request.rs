@@ -313,6 +313,13 @@ impl<'a> Request<'a> {
                 );
             }
             ll::Operation::Open(x) => {
+                if let Some(coordinator) = &se.coordinator {
+                    futures::executor::block_on(coordinator.coordinate_request(
+                        self.request.nodeid(),
+                        self.request.unique(),
+                        "OPEN"
+                    ));
+                }
                 se.filesystem
                     .open(self, self.request.nodeid().into(), x.flags(), self.reply());
             }
@@ -351,6 +358,13 @@ impl<'a> Request<'a> {
                 );
             }
             ll::Operation::Release(x) => {
+                if let Some(coordinator) = &se.coordinator {
+                    futures::executor::block_on(coordinator.coordinate_request(
+                        self.request.nodeid(),
+                        self.request.unique(),
+                        "RELEASE"
+                    ));
+                }
                 se.filesystem.release(
                     self,
                     self.request.nodeid().into(),

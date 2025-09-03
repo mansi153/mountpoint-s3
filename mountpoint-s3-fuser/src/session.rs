@@ -21,6 +21,7 @@ use crate::request::Request;
 use crate::Filesystem;
 use crate::MountOption;
 use crate::{channel::Channel, mnt::Mount};
+use crate::coordinator::RequestCoordinator;
 #[cfg(feature = "abi-7-11")]
 use crate::{channel::ChannelSender, notify::Notifier};
 
@@ -46,7 +47,6 @@ pub enum SessionACL {
 }
 
 /// The session data structure
-#[derive(Debug)]
 pub struct Session<FS: Filesystem> {
     /// Filesystem operation implementations
     pub(crate) filesystem: FS,
@@ -67,6 +67,25 @@ pub struct Session<FS: Filesystem> {
     pub(crate) initialized: AtomicBool,
     /// True if the filesystem was destroyed (destroy operation done)
     pub(crate) destroyed: AtomicBool,
+    /// Optional request coordinator for preventing race conditions
+    pub(crate) coordinator: Option<Arc<dyn RequestCoordinator>>,
+}
+
+impl<FS: Filesystem> fmt::Debug for Session<FS> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Session")
+            .field("filesystem", &"<filesystem>")
+            .field("ch", &self.ch)
+            .field("mount", &self.mount)
+            .field("allowed", &self.allowed)
+            .field("session_owner", &self.session_owner)
+            .field("proto_major", &self.proto_major)
+            .field("proto_minor", &self.proto_minor)
+            .field("initialized", &self.initialized)
+            .field("destroyed", &self.destroyed)
+            .field("coordinator", &self.coordinator.as_ref().map(|_| "<coordinator>"))
+            .finish()
+    }
 }
 
 impl<FS: Filesystem> AsFd for Session<FS> {
@@ -118,6 +137,7 @@ impl<FS: Filesystem> Session<FS> {
             proto_minor: AtomicU32::new(0),
             initialized: AtomicBool::new(false),
             destroyed: AtomicBool::new(false),
+            coordinator: None,
         })
     }
 
@@ -135,6 +155,7 @@ impl<FS: Filesystem> Session<FS> {
             proto_minor: AtomicU32::new(0),
             initialized: AtomicBool::new(false),
             destroyed: AtomicBool::new(false),
+            coordinator: None,
         }
     }
 
@@ -207,6 +228,11 @@ impl<FS: Filesystem> Session<FS> {
     #[cfg(feature = "abi-7-11")]
     pub fn notifier(&self) -> Notifier {
         Notifier::new(self.ch.sender())
+    }
+
+    /// Set a request coordinator for this session
+    pub fn set_coordinator(&mut self, coordinator: Arc<dyn RequestCoordinator>) {
+        self.coordinator = Some(coordinator);
     }
 }
 

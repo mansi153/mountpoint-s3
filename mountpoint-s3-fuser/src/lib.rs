@@ -41,12 +41,15 @@ pub use reply::{
 };
 pub use request::Request;
 pub use session::{BackgroundSession, Session, SessionACL, SessionUnmounter};
+pub use coordinator::RequestCoordinator;
+pub use ll::{INodeNo, RequestId};
 #[cfg(feature = "abi-7-28")]
 use std::cmp::max;
 #[cfg(feature = "abi-7-13")]
 use std::cmp::min;
 
 mod channel;
+mod coordinator;
 mod ll;
 mod mnt;
 #[cfg(feature = "abi-7-11")]

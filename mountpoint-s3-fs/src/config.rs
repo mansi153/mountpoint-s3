@@ -64,8 +64,9 @@ impl MountpointConfig {
             self.filesystem_config,
         );
 
+        let coordinator = fs.get_request_coordinator();
         let fuse_fs = S3FuseFilesystem::new(fs, self.error_logger);
-        let session = FuseSession::new(fuse_fs, self.fuse_session_config)?;
+        let session = FuseSession::new_with_coordinator(fuse_fs, self.fuse_session_config, Some(coordinator))?;
         ctrlc::set_handler(session.shutdown_fn()).context("failed to set interrupt handler")?;
         Ok(session)
     }

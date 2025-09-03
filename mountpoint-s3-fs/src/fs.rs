@@ -45,6 +45,11 @@ pub use handles::{FileHandle, FileHandleState};
 mod inode_lock;
 use inode_lock::InodeLock;
 
+pub(crate) mod request_coordinator;
+use request_coordinator::S3RequestCoordinator;
+
+
+
 mod sse;
 pub use sse::{ServerSideEncryption, SseCorruptedError};
 
@@ -64,6 +69,8 @@ where
     next_handle: AtomicU64,
     file_handles: AsyncRwLock<HashMap<u64, Arc<FileHandle<Client>>>>,
     inode_lock: InodeLock,
+    request_coordinator: Arc<S3RequestCoordinator>,
+
 }
 
 /// Reply to a `lookup` call
@@ -177,11 +184,17 @@ where
             next_handle: AtomicU64::new(1),
             file_handles: AsyncRwLock::new(HashMap::new()),
             inode_lock: InodeLock::new(),
+            request_coordinator: Arc::new(S3RequestCoordinator::new()),
+
         }
     }
 
     fn next_handle(&self) -> u64 {
         self.next_handle.fetch_add(1, Ordering::SeqCst)
+    }
+
+    pub fn get_request_coordinator(&self) -> Arc<S3RequestCoordinator> {
+        self.request_coordinator.clone()
     }
 
     /// Helper to return the u16 value in an environment variable, or panic.  Useful for unstable overrides.
