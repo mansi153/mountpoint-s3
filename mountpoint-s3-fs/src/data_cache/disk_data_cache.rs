@@ -424,10 +424,10 @@ impl DiskDataCache {
             };
             let path_to_remove = self.get_path_for_block_key(&to_remove);
             trace!("evicting block at {}", path_to_remove.display());
-            if let Err(remove_err) = fs::remove_file(&path_to_remove) {
-                if remove_err.kind() != ErrorKind::NotFound {
-                    warn!("unable to evict block: {:?}", remove_err);
-                }
+            if let Err(remove_err) = fs::remove_file(&path_to_remove)
+                && remove_err.kind() != ErrorKind::NotFound
+            {
+                warn!("unable to evict block: {:?}", remove_err);
             }
         }
         Ok(())
@@ -623,8 +623,8 @@ mod tests {
     use futures::executor::{ThreadPool, block_on};
     use futures::task::SpawnExt;
     use mountpoint_s3_client::types::ETag;
+    use rand::rngs::SmallRng;
     use rand::{Rng, SeedableRng};
-    use rand_chacha::ChaCha20Rng;
     use test_case::test_case;
 
     use crate::sync::Arc;
@@ -856,7 +856,7 @@ mod tests {
         const CACHE_LIMIT: usize = LARGE_OBJECT_SIZE;
 
         fn create_random(seed: u64, size: usize) -> ChecksummedBytes {
-            let mut rng = ChaCha20Rng::seed_from_u64(seed);
+            let mut rng = SmallRng::seed_from_u64(seed);
             let mut body = vec![0u8; size];
             rng.fill(&mut body[..]);
 

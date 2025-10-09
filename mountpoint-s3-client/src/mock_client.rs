@@ -15,8 +15,8 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use mountpoint_s3_crt::s3::client::BufferPoolUsageStats;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
-use rand_chacha::ChaCha20Rng;
 use thiserror::Error;
 use time::OffsetDateTime;
 use tracing::trace;
@@ -44,7 +44,7 @@ pub const RAMP_MODULUS: usize = 251; // Largest prime under 256
 static_assertions::const_assert!((RAMP_MODULUS > 0) && (RAMP_MODULUS <= 256));
 
 const RAMP_BUFFER_SIZE: usize = 4 * 1024 * RAMP_MODULUS; // around 1 MiB
-static_assertions::const_assert!(RAMP_BUFFER_SIZE % RAMP_MODULUS == 0);
+static_assertions::const_assert!(RAMP_BUFFER_SIZE.is_multiple_of(RAMP_MODULUS));
 
 // Return a ramping pattern of bytes modulo RAMP_MODULUS.  The seed is the first byte.
 pub fn ramp_bytes(seed: usize, size: usize) -> Vec<u8> {
@@ -374,7 +374,7 @@ impl MockClient {
         // Shuffle the keys now before we construct an iterator over them. This won't be stable in
         // the presence of mutation, but that's the expected behavior anyway.
         let mut object_keys: Vec<_> = objects.keys().filter(|key| key.starts_with(prefix)).collect();
-        object_keys.shuffle(&mut ChaCha20Rng::seed_from_u64(seed));
+        object_keys.shuffle(&mut SmallRng::seed_from_u64(seed));
 
         // Continuation tokens for unordered list will just be the index in the shuffled list. This
         // again won't work well in the presence of mutation, but again, that's the expected
@@ -447,10 +447,10 @@ impl MockClient {
                 objects.get_mut(key).unwrap()
             }
             Some(object) => {
-                if let Some(etag) = &params.if_match {
-                    if object.etag != *etag {
-                        return Err(ObjectClientError::ServiceError(PutObjectError::PreconditionFailed));
-                    }
+                if let Some(etag) = &params.if_match
+                    && object.etag != *etag
+                {
+                    return Err(ObjectClientError::ServiceError(PutObjectError::PreconditionFailed));
                 }
 
                 // Append empty contents to non-empty object is not allowed
@@ -790,12 +790,10 @@ impl Stream for MockGetObjectResponse {
         let next_read_size = self.part_size.min(self.length);
 
         // Simulate backpressure mechanism
-        if let Some(handle) = &self.backpressure_handle {
-            if self.next_offset >= handle.read_window_end_offset() {
-                return Poll::Ready(Some(Err(ObjectClientError::ClientError(MockClientError(
-                    "empty read window".into(),
-                )))));
-            }
+        if let Some(handle) = &self.backpressure_handle
+            && self.next_offset >= handle.read_window_end_offset()
+        {
+            return Poll::Ready(Some(mock_client_error("empty read window")));
         }
         let next_part = self.object.read(self.next_offset, next_read_size);
 
@@ -911,12 +909,12 @@ impl ObjectClient for MockClient {
         let objects = self.objects.read().unwrap();
 
         if let Some(object) = objects.get(key) {
-            if let Some(etag_match) = params.if_match.as_ref() {
-                if etag_match != &object.etag {
-                    return Err(ObjectClientError::ServiceError(GetObjectError::PreconditionFailed(
-                        Default::default(),
-                    )));
-                }
+            if let Some(etag_match) = params.if_match.as_ref()
+                && etag_match != &object.etag
+            {
+                return Err(ObjectClientError::ServiceError(GetObjectError::PreconditionFailed(
+                    Default::default(),
+                )));
             }
 
             let (next_offset, length) = if let Some(range) = params.range.as_ref() {
@@ -1134,38 +1132,32 @@ impl ObjectClient for MockClient {
         if bucket != self.config.bucket {
             return Err(ObjectClientError::ServiceError(RenameObjectError::NoSuchBucket));
         }
-
         if dst_key.len() > 1024 {
             return Err(ObjectClientError::ServiceError(RenameObjectError::KeyTooLong));
         }
 
         let mut objects = self.objects.write().unwrap();
-
         if objects.contains_key(dst_key) && params.if_none_match == Some("*".to_string()) {
             return Err(ObjectClientError::ServiceError(RenameObjectError::PreConditionFailed(
                 RenamePreconditionTypes::IfNoneMatch,
             )));
         }
-
         // First check if destination Etag matches
-        if let Some(dst_etag_to_match) = &params.if_match {
-            if let Some(destination_object) = objects.get(dst_key) {
-                if *dst_etag_to_match != destination_object.etag {
-                    return Err(ObjectClientError::ServiceError(RenameObjectError::PreConditionFailed(
-                        RenamePreconditionTypes::IfMatch,
-                    )));
-                }
-            }
+        if let Some(dst_etag_to_match) = &params.if_match
+            && let Some(destination_object) = objects.get(dst_key)
+            && *dst_etag_to_match != destination_object.etag
+        {
+            return Err(ObjectClientError::ServiceError(RenameObjectError::PreConditionFailed(
+                RenamePreconditionTypes::IfMatch,
+            )));
         }
-
-        if let Some(src_etag_to_match) = &params.if_source_match {
-            if let Some(src_object) = objects.get(src_key) {
-                if *src_etag_to_match != src_object.etag {
-                    return Err(ObjectClientError::ServiceError(RenameObjectError::PreConditionFailed(
-                        RenamePreconditionTypes::IfMatch,
-                    )));
-                }
-            }
+        if let Some(src_etag_to_match) = &params.if_source_match
+            && let Some(src_object) = objects.get(src_key)
+            && *src_etag_to_match != src_object.etag
+        {
+            return Err(ObjectClientError::ServiceError(RenameObjectError::PreConditionFailed(
+                RenamePreconditionTypes::IfMatch,
+            )));
         }
         if !objects.contains_key(src_key) {
             return Err(ObjectClientError::ServiceError(RenameObjectError::KeyNotFound));
@@ -1341,7 +1333,6 @@ enum MockObjectParts {
 mod tests {
     use futures::StreamExt;
     use rand::{Rng, RngCore, SeedableRng};
-    use rand_chacha::ChaChaRng;
     use std::ops::Range;
     use test_case::test_case;
 
@@ -1365,7 +1356,7 @@ mod tests {
         range: Option<Range<u64>>,
         object_metadata: HashMap<String, String>,
     ) {
-        let mut rng = ChaChaRng::seed_from_u64(0x12345678);
+        let mut rng = SmallRng::seed_from_u64(0x12345678);
 
         let client = MockClient::config().bucket("test_bucket").part_size(1024).build();
 
@@ -1416,7 +1407,7 @@ mod tests {
         range: Option<Range<u64>>,
         backpressure_read_window_size: usize,
     ) {
-        let mut rng = ChaChaRng::seed_from_u64(0x12345678);
+        let mut rng = SmallRng::seed_from_u64(0x12345678);
 
         let client = MockClient::config()
             .bucket("test_bucket")
@@ -1466,7 +1457,7 @@ mod tests {
     #[allow(clippy::reversed_empty_ranges)]
     #[tokio::test]
     async fn get_object_errors() {
-        let mut rng = ChaChaRng::seed_from_u64(0x12345678);
+        let mut rng = SmallRng::seed_from_u64(0x12345678);
 
         let client = MockClient::config().bucket("test_bucket").part_size(1024).build();
 
@@ -1523,7 +1514,7 @@ mod tests {
     async fn verify_backpressure_get_object() {
         let key = "key1";
 
-        let mut rng = ChaChaRng::seed_from_u64(0x12345678);
+        let mut rng = SmallRng::seed_from_u64(0x12345678);
         let client = MockClient::config()
             .bucket("test_bucket")
             .part_size(1024)
@@ -1952,7 +1943,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_put_object() {
-        let mut rng = ChaChaRng::seed_from_u64(0x12345678);
+        let mut rng = SmallRng::seed_from_u64(0x12345678);
 
         let obj = MockObject::ramp(0xaa, 2 * RAMP_BUFFER_SIZE, ETag::for_tests());
 
@@ -1972,7 +1963,7 @@ mod tests {
         // Stream randomly sized parts into put_object_request.
         let mut next_offset = 0;
         while next_offset < obj.len() {
-            let part_size = rng.gen_range(0..=obj.len() - next_offset);
+            let part_size = rng.random_range(0..=obj.len() - next_offset);
             let result = obj.read(next_offset as u64, part_size);
             next_offset += part_size;
             put_request.write(&result).await.unwrap();
@@ -2055,7 +2046,7 @@ mod tests {
     #[test_case(PutObjectTrailingChecksums::Disabled; "disabled")]
     #[tokio::test]
     async fn test_checksums_set_after_meta_put(trailing_checksums: PutObjectTrailingChecksums) {
-        let mut rng = ChaChaRng::seed_from_u64(0x12345678);
+        let mut rng = SmallRng::seed_from_u64(0x12345678);
 
         let obj = MockObject::ramp(0xaa, 2 * RAMP_BUFFER_SIZE, ETag::for_tests());
 
@@ -2071,7 +2062,7 @@ mod tests {
         // Stream randomly sized parts into put_object_request.
         let mut next_offset = 0;
         while next_offset < obj.len() {
-            let part_size = rng.gen_range(0..=obj.len() - next_offset);
+            let part_size = rng.random_range(0..=obj.len() - next_offset);
             let result = obj.read(next_offset as u64, part_size);
             next_offset += part_size;
             put_request.write(&result).await.unwrap();
