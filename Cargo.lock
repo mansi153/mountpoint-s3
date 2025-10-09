@@ -2697,7 +2697,6 @@ dependencies = [
  "ctor",
  "ctrlc",
  "dashmap",
- "event-listener",
  "filetime",
  "futures",
  "hdrhistogram",
